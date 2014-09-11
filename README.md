@@ -3,6 +3,14 @@ beanstalk-multiplex
 
 multiplex a beanstalk tube into one or more other tubes
 
+## Installation
+
+    $ sudo gem install beaneater
+    $ git clone https://github.com/martint17r/beanstalk-multiplex
+
+Put beanstalk-multiplex into a directory in your path, for example /usr/local/bin.
+
+
 ## Usage
 
 ```
@@ -34,3 +42,4 @@ Choose the EXPIRY Environment variable to be less than the expiry for beanstalk-
 
    * `beanstalk-multiplex` currently accepts exactly one server to connect to
    * retries and release_delay are not configurable through the command line
+   * there is no automatic installation script
