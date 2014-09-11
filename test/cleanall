@@ -1,0 +1,27 @@
+#!/usr/bin/ruby
+
+require 'beaneater'
+require 'json'
+require 'optparse'
+require 'yaml'
+
+options = {}
+options[:server] ="localhost:11300"
+
+OptionParser.new do |opts|
+	opts.banner = "Usage: cleanall [options]"
+	opts.on('-c', '--connect HOST:PORT', 'beanstalk server to connect to (defaults to localhost:11300)') { |v| options[:server] = v }
+end.parse!
+
+beanpool = Beaneater::Pool.new([options[:server]])
+
+beanpool.tubes.all.each do |tube|
+		puts "clearing #{tube.name}"
+		s=tube.stats
+		puts "\tr=#{s['current_jobs_ready']}"
+		tube.clear
+end
+
+# Disconnect the pool
+beanpool.close
+

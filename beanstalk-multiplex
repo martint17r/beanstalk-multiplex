@@ -1,0 +1,71 @@
+#!/usr/bin/ruby
+$stdout.sync = true
+
+require 'beaneater'
+require 'json'
+require 'optparse'
+require 'yaml'
+
+options = {}
+options[:server]="localhost:11300"
+options[:control]="mux-control"
+options[:expiry]=3600
+options[:debug]=false
+
+# retry so many times to deliver the job to the consumers
+options[:retries]=100
+
+# put a job back into the queue after n seconds, when no consumers are registered
+options[:release_delay]=30 
+
+opts = OptionParser.new do |opts|
+	opts.banner = "Usage: beanstalk-multiplex [options]"
+	opts.on('-h', '--host HOST:PORT', 'beanstalk server to connect to (defaults to localhost:11300)') { |v| options[:server] = v }
+	opts.on('-s', '--sourcetube NAME', 'source tube name') { |v| options[:source] = v }
+	opts.on('-c', '--controltube NAME', 'control tube name (defaults to "mux-control")') { |v| options[:control] = v }
+	opts.on('-e', '--expiry seconds', Float, 'time to live for target tubes (defaults to 3600)') { |v| options[:expiry] = v }
+	opts.on('-d', '--debug', 'spit out debug infos') { |v| options[:debug] = v }
+end
+
+opts.parse!
+
+if options[:source]==nil
+	puts "Fatal: No source tube given"
+	exit 1
+end
+
+# hash of tube-name and expiry point in time
+$tubes2put = {}
+
+class NoTubesError < StandardError
+end
+
+beanpool = Beaneater::Pool.new([options[:server]])
+
+beanpool.jobs.register(options[:source], :retry_on => [NoTubesError], :retries => 10) do |job|
+	puts "job taken from source tube" if options[:debug]
+	$tubes2put.each do |tubename, expiry|
+		if expiry>Time.now
+			puts "-> #{tubename}" if options[:debug]
+			beanpool.tubes[tubename].put(job.body)
+		else
+			$tubes2put.delete tubename
+			puts "expired #{tubename}" if options[:debug]
+		end
+	end
+	if $tubes2put.length==0
+		puts "no target tubes found - putting job back to tube with 20s delay" 
+		raise NoTubesError
+	end
+end
+
+beanpool.jobs.register(options[:control]) do |job|
+	$tubes2put[job.body.to_s]=Time.now+options[:expiry]
+	puts "keep-alive extended for '#{job.body}' (#{$tubes2put[job.body.to_s]})" if options[:debug]
+end
+	
+puts "Starting to process jobs" if options[:debug]
+beanpool.jobs.process! :release_delay => options[:release_delay]
+
+beanpool.close
+

@@ -1,0 +1,43 @@
+#!/usr/bin/ruby
+
+require 'beaneater'
+require 'json'
+require 'optparse'
+require 'yaml'
+
+options = {}
+options[:server] ="localhost:11300"
+options[:control] ="mux-control"
+
+OptionParser.new do |opts|
+	opts.banner = "Usage: consumer [options] tubename"
+	opts.on('-c', '--connect HOST:PORT', 'beanstalk server to connect to (defaults to localhost:11300)') { |v| options[:server] = v }
+	opts.on('-c', '--controltube NAME', 'control tube name (defaults to "mux-control")') { |v| options[:control] = v }
+end.parse!
+
+consumerpool = Beaneater::Pool.new([options[:server]])
+controlpool = Beaneater::Pool.new([options[:server]])
+
+ARGV.each do |tubename|
+	consumerpool.jobs.register(tubename) do |job|
+		puts "job taken from #{tubename}"
+		puts job.body
+	end
+end
+
+Thread.new do
+  controltube=controlpool.tubes[options[:control]]
+  while true do
+	ARGV.each do |tubename|
+		controltube.put(tubename)
+		puts "sent keepalive for #{tubename}"
+	end
+    sleep 5
+  end
+end
+
+consumerpool.jobs.process!
+
+consumerpool.close
+controlpool.close
+
