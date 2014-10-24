@@ -10,7 +10,7 @@ options[:server] ="localhost:11300"
 options[:body] = Time.now.to_s
 
 OptionParser.new do |opts|
-	opts.banner = "Usage: injecter [options]"
+	opts.banner = "Usage: injecter [options] tube [tube]..."
 	opts.on('-c', '--connect HOST:PORT', 'beanstalk server to connect to (defaults to localhost:11300)') { |v| options[:server] = v }
 	opts.on('-b', '--body STRING', 'use STRING as job body (defaults to current time)') { |v| options[:body] = v }
 	opts.on('-d', '--debug', 'spit out debug infos') { |v| options[:debug] = v }
