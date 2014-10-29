@@ -11,6 +11,7 @@ $options[:server]="localhost:11300"
 $options[:control]="mux-control"
 $options[:expiry]=3600
 $options[:debug]=false
+$options[:saveonexit]=false
 
 # retry so many times to deliver the job to the consumers
 $options[:retries]=100
@@ -25,6 +26,7 @@ opts = OptionParser.new do |opts|
 	opts.on('-c', '--controltube NAME', 'control tube name (defaults to "mux-control")') { |v| $options[:control] = v }
 	opts.on('-e', '--expiry seconds', Float, 'time to live for target tubes (defaults to 3600)') { |v| $options[:expiry] = v }
 	opts.on('-d', '--debug', 'spit out debug infos') { |v| $options[:debug] = v }
+	opts.on('-e', '--saveonexit', 'save the current tubes to control tube on exit') { |v| $options[:saveonexit] = v }
 end
 
 opts.parse!
@@ -75,8 +77,33 @@ beanpool.jobs.register($options[:control]) do |job|
 	processControlJob(job)
 end
 	
-puts "Starting to process jobs" if $options[:debug]
-beanpool.jobs.process! :release_delay => $options[:release_delay]
+processor = Thread.new do
+	puts "Starting to process jobs" if $options[:debug]
+	beanpool.jobs.process! :release_delay => $options[:release_delay]
+	beanpool2.close
+	puts "Finished processing" if $options[:debug]
+end
 
-beanpool.close
+%w(INT USR1 USR2 TERM TTIN).each do |sig|
+	trap sig do
+		Thread.kill(processor)
+	end
+end
+
+processor.join
+
+# use a new connection to the server as the old one may still block
+#  if there was no traffic on the tubes.
+beanpool2 = Beaneater::Pool.new([$options[:server]])
+if $options[:saveonexit]
+	puts "Saving current tubes to #{$options[:control]}"
+	control=beanpool2.tubes[$options[:control]]
+	$tubes2put.each do |tubename, expiry|
+		if expiry>Time.now
+			control.put(tubename)
+		end
+	end
+	puts "done"
+end
+beanpool2.close
 

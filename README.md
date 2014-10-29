@@ -43,3 +43,15 @@ Choose the EXPIRY Environment variable to be less than the expiry for beanstalk-
    * `beanstalk-multiplex` currently accepts exactly one server to connect to
    * retries and release_delay are not configurable through the command line
    * there is no automatic installation script
+
+## Testcases
+
+### Test --saveonexit
+
+```
+./beanstalk-multiplex -s foo --saveonexit -d
+./beanstalk-mux-injector mux-control -b foo_en;./beanstalk-mux-injector mux-control -b foo_de
+```
+
+interrupt beanstalk-multiplex and start it again - it should process 2 jobs from mux-control for fox_de & fox_en
+
