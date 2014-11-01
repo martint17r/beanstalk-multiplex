@@ -46,6 +46,37 @@ Choose the EXPIRY Environment variable to be less than the expiry for beanstalk-
 
 ## Testcases
 
+### Basic operations
+
+```
+./beanstalk-multiplex -s foo -d
+./beanstalk-mux-injector mux-control -b foo_en;./beanstalk-mux-injector mux-control -b foo_de
+./beanstalk-mux-injector foo
+```
+should fan out to foo_de & foo_en
+
+### Tube timeout
+
+```
+./beanstalk-multiplex -s foo -d -e 1
+./beanstalk-mux-injector mux-control -b foo_en
+```
+should expire the foo_en tube after 1 second
+
+### Tube timeout, part two
+
+```
+./beanstalk-multiplex -s foo -d -e 1
+./beanstalk-mux-injector mux-control -b foo_en;sleep 1;./beanstalk-mux-injector foo
+```
+should expire the foo_en tube after 2 seconds && release the job back to the tube
+
+```
+./beanstalk-mux-injector mux-control -b foo_en
+```
+
+should deliver the released job
+
 ### Test --saveonexit
 
 ```

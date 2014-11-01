@@ -17,7 +17,7 @@ $options[:saveonexit]=false
 $options[:retries]=100
 
 # put a job back into the queue after n seconds, when no consumers are registered
-$options[:release_delay]=30
+$options[:release_delay]=5
 
 opts = OptionParser.new do |opts|
 	opts.banner = "Usage: beanstalk-multiplex [options]"
@@ -26,7 +26,7 @@ opts = OptionParser.new do |opts|
 	opts.on('-c', '--controltube NAME', 'control tube name (defaults to "mux-control")') { |v| $options[:control] = v }
 	opts.on('-e', '--expiry seconds', Float, 'time to live for target tubes (defaults to 3600)') { |v| $options[:expiry] = v }
 	opts.on('-d', '--debug', 'spit out debug infos') { |v| $options[:debug] = v }
-	opts.on('-e', '--saveonexit', 'save the current tubes to control tube on exit') { |v| $options[:saveonexit] = v }
+	opts.on('-x', '--saveonexit', 'save the current tubes to control tube on exit') { |v| $options[:saveonexit] = v }
 end
 
 opts.parse!
@@ -36,52 +36,74 @@ if $options[:source]==nil
 	exit 1
 end
 
-# hash of tube-name and expiry point in time
-$tubes2put = {}
-
 class NoTubesError < StandardError
 end
 
-beanpool = Beaneater::Pool.new([$options[:server]])
+# hash of tube-name and expiry point in time
+$tubes2put = {}
+
+$beanpool = Beaneater::Pool.new([$options[:server]])
+$beanpool.tubes.watch!($options[:control])
 
 def processControlJob(job)
-	$tubes2put[job.body.to_s]=Time.now+$options[:expiry]
-	puts "keep-alive extended for '#{job.body}' (#{$tubes2put[job.body.to_s]})" if $options[:debug]
+	newTube=job.body.to_s
+	$tubes2put[newTube]=Time.now+$options[:expiry]
+	$beanpool.tubes.watch($options[:source]) if $tubes2put.length > 0
+	puts "keep-alive extended for '#{newTube}' (#{$tubes2put[newTube]})" if $options[:debug]
 end
 
-control = beanpool.tubes[$options[:control]]
-while control.peek(:ready)
-	job = control.reserve
-	processControlJob(job)
-	job.delete
-end
-
-beanpool.jobs.register($options[:source], :retry_on => [NoTubesError], :retries => 10) do |job|
-	puts "job taken from source tube" if $options[:debug]
-	$tubes2put.each do |tubename, expiry|
-		if expiry>Time.now
-			puts "-> #{tubename}" if $options[:debug]
-			beanpool.tubes[tubename].put(job.body)
-		else
-			$tubes2put.delete tubename
-			puts "expired #{tubename}" if $options[:debug]
+def processJobs!
+	puts "Starting to process jobs" if $options[:debug]
+	loop do
+		begin
+			job = $beanpool.tubes.reserve(2)
+			if job.tube == $options[:control]
+				processControlJob(job)
+			elsif job.tube == $options[:source]
+				$tubes2put.each do |tubename, expiry|
+					if expiry>Time.now
+						puts "-> #{tubename}" if $options[:debug]
+						$beanpool.tubes[tubename].put(job.body)
+					else
+						$tubes2put.delete tubename
+						puts "expired #{tubename}" if $options[:debug]
+					end
+				end
+				if $tubes2put.length == 0
+					$beanpool.tubes.ignore($options[:source])
+					raise NoTubesError
+				end
+			else
+				puts "error"
+			end
+			job.delete
+		rescue Beaneater::JobNotReserved, Beaneater::NotFoundError, Beaneater::TimedOutError
+			tubes=$beanpool.tubes.watched.map{|t| t.name}.join(", ")
+			puts "reserve timed out, watching #{tubes}"
+			$tubes2put.each do |tubename, expiry|
+				if expiry<Time.now
+					$tubes2put.delete tubename
+					puts "expired #{tubename}" if $options[:debug]
+					if $tubes2put.length == 0
+						$beanpool.tubes.ignore($options[:source])
+						puts "no tubes left, ignoring source tube" if $options[:debug]
+					end
+				end
+			end
+			retry
+		rescue NoTubesError
+			puts "releasing job #{job.id}, because all tubes expired"
+	        job.release(:delay => $options[:release_delay])
+		ensure # bury if still reserved
+			job.bury if job && job.exists? && job.reserved?
 		end
 	end
-	if $tubes2put.length==0
-		puts "no target tubes found - putting job back to tube with 20s delay" 
-		raise NoTubesError
-	end
+	$beanpool.close
+	puts "Finished processing" if $options[:debug]
 end
 
-beanpool.jobs.register($options[:control]) do |job|
-	processControlJob(job)
-end
-	
 processor = Thread.new do
-	puts "Starting to process jobs" if $options[:debug]
-	beanpool.jobs.process! :release_delay => $options[:release_delay]
-	beanpool2.close
-	puts "Finished processing" if $options[:debug]
+	processJobs!
 end
 
 %w(INT USR1 USR2 TERM TTIN).each do |sig|
@@ -94,8 +116,8 @@ processor.join
 
 # use a new connection to the server as the old one may still block
 #  if there was no traffic on the tubes.
-beanpool2 = Beaneater::Pool.new([$options[:server]])
 if $options[:saveonexit]
+	beanpool2 = Beaneater::Pool.new([$options[:server]])
 	puts "Saving current tubes to #{$options[:control]}"
 	control=beanpool2.tubes[$options[:control]]
 	$tubes2put.each do |tubename, expiry|
@@ -104,6 +126,6 @@ if $options[:saveonexit]
 		end
 	end
 	puts "done"
+	beanpool2.close
 end
-beanpool2.close
 
