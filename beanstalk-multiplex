@@ -52,44 +52,63 @@ def processControlJob(job)
 	puts "keep-alive extended for '#{newTube}' (#{$tubes2put[newTube]})" if $options[:debug]
 end
 
+$control = $beanpool.tubes[$options[:control]]
+
+def emptyControlTube
+	while $control.peek(:ready)
+		job = $control.reserve
+		processControlJob(job)
+		job.delete
+	end
+end
+
+def processNextJob(job)
+	if job.tube == $options[:control]
+		processControlJob(job)
+	elsif job.tube == $options[:source]
+		$tubes2put.each do |tubename, expiry|
+			if expiry>Time.now
+				puts "-> #{tubename}" if $options[:debug]
+				$beanpool.tubes[tubename].put(job.body)
+			else
+				$tubes2put.delete tubename
+				puts "expired #{tubename}" if $options[:debug]
+			end
+		end
+		if $tubes2put.length == 0
+			$beanpool.tubes.ignore($options[:source])
+			raise NoTubesError
+		end
+	else
+		puts "error"
+	end
+	job.delete
+end
+
+def expireTubes
+	tubes=$beanpool.tubes.watched.map{|t| t.name}.join(", ")
+	puts "reserve timed out, watching #{tubes}"
+	$tubes2put.each do |tubename, expiry|
+		if expiry<Time.now
+			$tubes2put.delete tubename
+			puts "expired #{tubename}" if $options[:debug]
+			if $tubes2put.length == 0
+				$beanpool.tubes.ignore($options[:source])
+				puts "no tubes left, ignoring source tube" if $options[:debug]
+			end
+		end
+	end
+end
+
 def processJobs!
 	puts "Starting to process jobs" if $options[:debug]
 	loop do
 		begin
+			emptyControlTube()
 			job = $beanpool.tubes.reserve(2)
-			if job.tube == $options[:control]
-				processControlJob(job)
-			elsif job.tube == $options[:source]
-				$tubes2put.each do |tubename, expiry|
-					if expiry>Time.now
-						puts "-> #{tubename}" if $options[:debug]
-						$beanpool.tubes[tubename].put(job.body)
-					else
-						$tubes2put.delete tubename
-						puts "expired #{tubename}" if $options[:debug]
-					end
-				end
-				if $tubes2put.length == 0
-					$beanpool.tubes.ignore($options[:source])
-					raise NoTubesError
-				end
-			else
-				puts "error"
-			end
-			job.delete
+			processNextJob(job)
 		rescue Beaneater::JobNotReserved, Beaneater::NotFoundError, Beaneater::TimedOutError
-			tubes=$beanpool.tubes.watched.map{|t| t.name}.join(", ")
-			puts "reserve timed out, watching #{tubes}"
-			$tubes2put.each do |tubename, expiry|
-				if expiry<Time.now
-					$tubes2put.delete tubename
-					puts "expired #{tubename}" if $options[:debug]
-					if $tubes2put.length == 0
-						$beanpool.tubes.ignore($options[:source])
-						puts "no tubes left, ignoring source tube" if $options[:debug]
-					end
-				end
-			end
+			expireTubes()
 			retry
 		rescue NoTubesError
 			puts "releasing job #{job.id}, because all tubes expired"
