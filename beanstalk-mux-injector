@@ -8,18 +8,23 @@ require 'yaml'
 options = {}
 options[:server] ="localhost:11300"
 options[:body] = Time.now.to_s
+options[:jobcount] = 1
 
 OptionParser.new do |opts|
 	opts.banner = "Usage: injecter [options] tube [tube]..."
 	opts.on('-c', '--connect HOST:PORT', 'beanstalk server to connect to (defaults to localhost:11300)') { |v| options[:server] = v }
-	opts.on('-b', '--body STRING', 'use STRING as job body (defaults to current time)') { |v| options[:body] = v }
+	opts.on('-bbody', '--body=STRING', 'use STRING as job body (defaults to current time)') { |v| options[:body] = v }
 	opts.on('-d', '--debug', 'spit out debug infos') { |v| options[:debug] = v }
+	opts.on('-j n', '--jobs', OptionParser::DecimalInteger, 
+			'number of jobs to put into the tubes') { |v| options[:jobcount] = v }
 end.parse!
 
 beanpool = Beaneater::Pool.new([options[:server]])
 
 ARGV.each do |tubename|
-	beanpool.tubes[tubename].put options[:body]
+	options[:jobcount].times do
+		beanpool.tubes[tubename].put options[:body]
+	end
 end
 
 # Disconnect the pool
